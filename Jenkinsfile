@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -104,7 +105,7 @@ pipeline {
                 }
 
                 sh '''
-                    set -e
+                    set -eu
                     ansible-galaxy collection install amazon.aws
 
                     cat > ansible/inventory.ini <<INVENTORY
@@ -140,33 +141,48 @@ INVENTORY
                 }
 
                 sh '''
-                    set -e
+                    set -eu
+
                     COMMAND_ID=$(aws ssm send-command \
                       --region "$AWS_DEFAULT_REGION" \
                       --instance-ids "$KAFKA_INSTANCE_ID" \
                       --document-name "AWS-RunShellScript" \
-                      --parameters '{"commands":["sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
+                      --parameters '{"commands":["for i in $(seq 1 30); do STATUS=$(sudo systemctl is-active kafka 2>/dev/null || true); if [ \\"$STATUS\\" = \\"active\\" ]; then break; fi; sleep 10; done; echo Kafka_service_status=$(sudo systemctl is-active kafka 2>/dev/null || true); sudo systemctl status kafka --no-pager -l; sudo journalctl -u kafka -n 80 --no-pager; sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
                       --query 'Command.CommandId' \
                       --output text)
 
-                    for i in $(seq 1 60); do
+                    echo "SSM Command ID: $COMMAND_ID"
+
+                    for i in $(seq 1 100); do
                         STATUS=$(aws ssm get-command-invocation \
                           --region "$AWS_DEFAULT_REGION" \
                           --command-id "$COMMAND_ID" \
                           --instance-id "$KAFKA_INSTANCE_ID" \
                           --query 'Status' --output text 2>/dev/null || true)
 
-                        if [ "$STATUS" = "Success" ]; then
-                            echo "Kafka is active."
-                            exit 0
-                        fi
-
                         case "$STATUS" in
+                            Success)
+                                echo "Kafka verification passed."
+                                aws ssm get-command-invocation \
+                                  --region "$AWS_DEFAULT_REGION" \
+                                  --command-id "$COMMAND_ID" \
+                                  --instance-id "$KAFKA_INSTANCE_ID" \
+                                  --query 'StandardOutputContent' \
+                                  --output text
+                                exit 0
+                                ;;
                             Failed|Cancelled|TimedOut)
                                 echo "Kafka verification failed: $STATUS"
+                                aws ssm get-command-invocation \
+                                  --region "$AWS_DEFAULT_REGION" \
+                                  --command-id "$COMMAND_ID" \
+                                  --instance-id "$KAFKA_INSTANCE_ID" \
+                                  --query '{Output:StandardOutputContent,Error:StandardErrorContent}' \
+                                  --output json
                                 exit 1
                                 ;;
                         esac
+
                         sleep 5
                     done
 
@@ -210,7 +226,7 @@ INVENTORY
                 }
 
                 sh '''
-                    set -e
+                    set -eu
                     aws s3 rm "s3://${SSM_BUCKET}" \
                       --recursive --region "$AWS_DEFAULT_REGION"
                     terraform -chdir=terraform apply -auto-approve tfplan
