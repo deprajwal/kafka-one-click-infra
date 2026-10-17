@@ -63,15 +63,14 @@
     group: kafka
     mode: "0750"
 
-# Task 8: Configure Kafka's KRaft server properties.
-- name: Configure Kafka server properties
-  ansible.builtin.template:
-    src: server.properties.j2
-    dest: "{{ kafka_install_dir }}/config/kraft/server.properties"
-    owner: root
+# Task 8: Create Kafka runtime logs directory.
+- name: Create Kafka runtime logs directory
+  ansible.builtin.file:
+    path: "{{ kafka_install_dir }}/logs"
+    state: directory
+    owner: kafka
     group: kafka
-    mode: "0640"
-  notify: Restart Kafka
+    mode: "0755"
 
 # Task 9: Check whether Kafka storage has already been initialized.
 - name: Check Kafka storage metadata
