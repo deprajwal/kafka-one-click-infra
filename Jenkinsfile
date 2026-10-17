@@ -1,6 +1,3 @@
-cd ~/Downloads/kafka-one-click-infra
-
-cat > Jenkinsfile <<'EOF'
 pipeline {
     agent any
 
@@ -8,7 +5,7 @@ pipeline {
         choice(
             name: 'ACTION',
             choices: ['CREATE', 'DESTROY'],
-            description: 'CREATE Kafka infrastructure or DESTROY it to stop infrastructure charges'
+            description: 'Create or destroy Kafka infrastructure'
         )
     }
 
@@ -26,7 +23,7 @@ pipeline {
     }
 
     stages {
-        stage('Checkout and Check Tools') {
+        stage('Check Tools and AWS') {
             steps {
                 sh '''
                     set -e
@@ -39,7 +36,7 @@ pipeline {
             }
         }
 
-        stage('Initialize and Validate') {
+        stage('Terraform Init and Validate') {
             steps {
                 dir('terraform') {
                     sh '''
@@ -67,8 +64,8 @@ pipeline {
                 expression { params.ACTION == 'CREATE' }
             }
             steps {
-                input message: 'Review the Terraform plan and AWS costs. Create Kafka infrastructure?',
-                      ok: 'CREATE Infrastructure'
+                input message: 'Review the Terraform plan and AWS costs before creating resources.',
+                      ok: 'Approve CREATE'
             }
         }
 
@@ -83,7 +80,7 @@ pipeline {
             }
         }
 
-        stage('Configure Kafka') {
+        stage('Configure Kafka with Ansible') {
             when {
                 expression { params.ACTION == 'CREATE' }
             }
@@ -143,7 +140,6 @@ INVENTORY
 
                 sh '''
                     set -e
-
                     COMMAND_ID=$(aws ssm send-command \
                       --region "$AWS_DEFAULT_REGION" \
                       --instance-ids "$KAFKA_INSTANCE_ID" \
@@ -152,44 +148,28 @@ INVENTORY
                       --query 'Command.CommandId' \
                       --output text)
 
-                    echo "Waiting for Kafka verification: $COMMAND_ID"
-
-                    STATUS=""
                     for i in $(seq 1 60); do
                         STATUS=$(aws ssm get-command-invocation \
                           --region "$AWS_DEFAULT_REGION" \
                           --command-id "$COMMAND_ID" \
                           --instance-id "$KAFKA_INSTANCE_ID" \
-                          --query 'Status' \
-                          --output text 2>/dev/null || true)
+                          --query 'Status' --output text 2>/dev/null || true)
+
+                        if [ "$STATUS" = "Success" ]; then
+                            echo "Kafka is active."
+                            exit 0
+                        fi
 
                         case "$STATUS" in
-                            Success)
-                                echo "Kafka service is active."
-                                aws ssm get-command-invocation \
-                                  --region "$AWS_DEFAULT_REGION" \
-                                  --command-id "$COMMAND_ID" \
-                                  --instance-id "$KAFKA_INSTANCE_ID" \
-                                  --query 'StandardOutputContent' \
-                                  --output text
-                                exit 0
-                                ;;
                             Failed|Cancelled|TimedOut)
                                 echo "Kafka verification failed: $STATUS"
-                                aws ssm get-command-invocation \
-                                  --region "$AWS_DEFAULT_REGION" \
-                                  --command-id "$COMMAND_ID" \
-                                  --instance-id "$KAFKA_INSTANCE_ID" \
-                                  --query 'StandardErrorContent' \
-                                  --output text || true
                                 exit 1
                                 ;;
                         esac
-
                         sleep 5
                     done
 
-                    echo "Timed out waiting for Kafka verification. Last status: $STATUS"
+                    echo "Kafka verification timed out."
                     exit 1
                 '''
             }
@@ -211,8 +191,8 @@ INVENTORY
                 expression { params.ACTION == 'DESTROY' }
             }
             steps {
-                input message: 'This will destroy the Terraform-managed Kafka infrastructure. The Terraform state bucket will be preserved. Continue?',
-                      ok: 'DESTROY Infrastructure'
+                input message: 'This removes Terraform-managed infrastructure. Preserve the separate Terraform state bucket.',
+                      ok: 'Approve DESTROY'
             }
         }
 
@@ -230,12 +210,8 @@ INVENTORY
 
                 sh '''
                     set -e
-
-                    # Empty only the SSM transfer bucket so Terraform can delete it.
-                    # The separate Terraform state bucket is not touched.
-                    aws s3 rm "s3://${SSM_BUCKET}" --recursive \
-                      --region "$AWS_DEFAULT_REGION"
-
+                    aws s3 rm "s3://${SSM_BUCKET}" \
+                      --recursive --region "$AWS_DEFAULT_REGION"
                     terraform -chdir=terraform apply -auto-approve terraform/tfplan
                 '''
             }
@@ -245,8 +221,7 @@ INVENTORY
     post {
         always {
             sh 'rm -f terraform/tfplan'
-            echo 'Pipeline finished. Review the stage results.'
+            echo 'Pipeline finished. Check the stage results.'
         }
     }
 }
-EOF
