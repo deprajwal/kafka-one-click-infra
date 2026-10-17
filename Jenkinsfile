@@ -20,6 +20,7 @@ pipeline {
         AWS_DEFAULT_REGION = 'ap-south-1'
         AWS_PROFILE = 'default'
         ANSIBLE_CONFIG = "${WORKSPACE}/ansible.cfg"
+        OBJC_DISABLE_INITIALIZE_FORK_SAFETY = 'YES'
     }
 
     stages {
@@ -144,7 +145,7 @@ INVENTORY
                       --region "$AWS_DEFAULT_REGION" \
                       --instance-ids "$KAFKA_INSTANCE_ID" \
                       --document-name "AWS-RunShellScript" \
-                      --parameters '{"commands":["sudo systemctl is-active kafka"]}' \
+                      --parameters '{"commands":["sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
                       --query 'Command.CommandId' \
                       --output text)
 
@@ -212,7 +213,7 @@ INVENTORY
                     set -e
                     aws s3 rm "s3://${SSM_BUCKET}" \
                       --recursive --region "$AWS_DEFAULT_REGION"
-                    terraform -chdir=terraform apply -auto-approve terraform/tfplan
+                    terraform -chdir=terraform apply -auto-approve tfplan
                 '''
             }
         }
