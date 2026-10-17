@@ -1,0 +1,19 @@
+
+---
+# Kafka version to install.
+kafka_version: "3.9.2"
+
+# Base directory where Kafka will be installed.
+kafka_install_dir: "/opt/kafka"
+
+# Directory where Kafka will store its event logs.
+kafka_data_dir: "/var/lib/kafka"
+
+# Port used by Kafka clients.
+kafka_port: 9092
+
+# Address that Kafka advertises to clients.
+kafka_advertised_host: "127.0.0.1"
+
+# KRaft controller communication port.
+kafka_controller_port: 9093

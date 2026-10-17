@@ -1,0 +1,30 @@
+
+# Run Kafka as both a broker and a KRaft controller.
+process.roles=broker,controller
+
+# Unique ID for this Kafka node.
+node.id=1
+
+# Identify the controller that participates in the KRaft quorum.
+controller.quorum.voters=1@localhost:{{ kafka_controller_port }}
+
+# Listen for Kafka client connections and controller communication.
+listeners=PLAINTEXT://0.0.0.0:{{ kafka_port }},CONTROLLER://0.0.0.0:{{ kafka_controller_port }}
+
+# Tell clients which address to use to connect to Kafka.
+advertised.listeners=PLAINTEXT://{{ kafka_advertised_host }}:{{ kafka_port }}
+
+# Specify the listener used for controller communication.
+controller.listener.names=CONTROLLER
+
+# Specify the listener used for broker-to-broker communication.
+inter.broker.listener.name=PLAINTEXT
+
+# Map listener names to their security protocols.
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+# Store Kafka event data in this directory.
+log.dirs={{ kafka_data_dir }}
+
+# Default number of partitions for newly created topics.
+num.partitions=3

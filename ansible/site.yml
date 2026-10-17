@@ -1,0 +1,10 @@
+
+---
+# Configure the EC2 instance that will run Kafka.
+- name: Configure Kafka server
+  hosts: kafka
+  become: true
+
+  # Execute the reusable Kafka role.
+  roles:
+    - kafka

@@ -1,0 +1,22 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+
+# Sensitive configuration
+*.tfvars
+*.tfvars.json
+.env
+.env.*
+
+# Ansible
+*.retry
+vault-password.txt
+
+# macOS and editors
+.DS_Store
+.vscode/
+.idea/
