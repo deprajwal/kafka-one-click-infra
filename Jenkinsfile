@@ -8,9 +8,11 @@ pipeline {
     }
 
     environment {
-        AWS_DEFAULT_REGION = 'ap-south-1'
-        TF_DIR = 'terraform'
-    }
+    PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    AWS_DEFAULT_REGION = 'ap-south-1'
+    AWS_PROFILE = 'default'
+    TF_DIR = 'terraform'
+}
 
     stages {
         stage('Checkout and Check Tools') {
