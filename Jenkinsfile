@@ -28,7 +28,7 @@ pipeline {
         stage('Check Tools and AWS') {
             steps {
                 sh '''
-                    set -e
+                    set -eu
                     git --version
                     terraform version
                     ansible --version
@@ -42,7 +42,7 @@ pipeline {
             steps {
                 dir('terraform') {
                     sh '''
-                        set -e
+                        set -eu
                         terraform init -reconfigure
                         terraform validate
                     '''
@@ -79,6 +79,45 @@ pipeline {
                 dir('terraform') {
                     sh 'terraform apply -auto-approve tfplan'
                 }
+            }
+        }
+
+        stage('Wait for SSM Online') {
+            when {
+                expression { params.ACTION == 'CREATE' }
+            }
+            steps {
+                script {
+                    env.KAFKA_INSTANCE_ID = sh(
+                        script: 'terraform -chdir=terraform output -raw kafka_instance_id',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh '''
+                    set -eu
+                    echo "Waiting for SSM: ${KAFKA_INSTANCE_ID}"
+
+                    for i in $(seq 1 60); do
+                        STATUS=$(aws ssm describe-instance-information \
+                          --region "$AWS_DEFAULT_REGION" \
+                          --filters "Key=InstanceIds,Values=${KAFKA_INSTANCE_ID}" \
+                          --query 'InstanceInformationList[0].PingStatus' \
+                          --output text 2>/dev/null || true)
+
+                        echo "SSM status: $STATUS (attempt $i/60)"
+
+                        if [ "$STATUS" = "Online" ]; then
+                            echo "EC2 is Online in SSM."
+                            exit 0
+                        fi
+
+                        sleep 10
+                    done
+
+                    echo "ERROR: EC2 did not become SSM Online within 10 minutes."
+                    exit 1
+                '''
             }
         }
 
