@@ -1,6 +1,6 @@
 
 ---
-# Task 1: Install Java and the utilities required by Kafka.
+# Task 1: Install Java and required utilities.
 - name: Install required packages
   ansible.builtin.dnf:
     name:
@@ -10,7 +10,7 @@
     state: present
     update_cache: true
 
-# Task 2: Create the Kafka installation directory.
+# Task 2: Create Kafka installation directory.
 - name: Create Kafka installation directory
   ansible.builtin.file:
     path: "{{ kafka_install_dir }}"
@@ -19,14 +19,14 @@
     group: root
     mode: "0755"
 
-# Task 3: Download the Kafka binary archive.
+# Task 3: Download Kafka archive.
 - name: Download Kafka archive
   ansible.builtin.get_url:
     url: "https://archive.apache.org/dist/kafka/{{ kafka_version }}/kafka_2.13-{{ kafka_version }}.tgz"
     dest: "/tmp/kafka_{{ kafka_version }}.tgz"
     mode: "0644"
 
-# Task 4: Extract Kafka into its installation directory.
+# Task 4: Extract Kafka.
 - name: Extract Kafka archive
   ansible.builtin.unarchive:
     src: "/tmp/kafka_{{ kafka_version }}.tgz"
@@ -36,14 +36,14 @@
       - "--strip-components=1"
     creates: "{{ kafka_install_dir }}/bin/kafka-server-start.sh"
 
-# Task 5: Create a dedicated system group for Kafka.
+# Task 5: Create Kafka group.
 - name: Create Kafka group
   ansible.builtin.group:
     name: kafka
     system: true
     state: present
 
-# Task 6: Create a dedicated system user for Kafka.
+# Task 6: Create Kafka user.
 - name: Create Kafka user
   ansible.builtin.user:
     name: kafka
@@ -54,7 +54,7 @@
     create_home: false
     state: present
 
-# Task 7: Create the directory where Kafka stores its event logs.
+# Task 7: Create Kafka data directory.
 - name: Create Kafka data directory
   ansible.builtin.file:
     path: "{{ kafka_data_dir }}"
@@ -72,13 +72,23 @@
     group: kafka
     mode: "0755"
 
-# Task 9: Check whether Kafka storage has already been initialized.
+# Task 9: Apply the actual KRaft configuration template.
+- name: Configure Kafka KRaft server properties
+  ansible.builtin.template:
+    src: server.properties.j2
+    dest: "{{ kafka_install_dir }}/config/kraft/server.properties"
+    owner: root
+    group: kafka
+    mode: "0640"
+  notify: Restart Kafka
+
+# Task 10: Check whether Kafka storage is initialized.
 - name: Check Kafka storage metadata
   ansible.builtin.stat:
     path: "{{ kafka_data_dir }}/meta.properties"
   register: kafka_storage_metadata
 
-# Task 10: Generate a cluster ID only for uninitialized storage.
+# Task 11: Generate a cluster ID only for new storage.
 - name: Generate Kafka cluster ID
   ansible.builtin.command:
     argv:
@@ -88,7 +98,7 @@
   changed_when: false
   when: not kafka_storage_metadata.stat.exists
 
-# Task 11: Initialize Kafka storage for KRaft mode.
+# Task 12: Format Kafka storage for KRaft.
 - name: Format Kafka storage
   ansible.builtin.command:
     argv:
@@ -101,7 +111,7 @@
   become_user: kafka
   when: not kafka_storage_metadata.stat.exists
 
-# Task 12: Install the Kafka systemd service definition.
+# Task 13: Install Kafka systemd service.
 - name: Install Kafka systemd service
   ansible.builtin.copy:
     dest: /etc/systemd/system/kafka.service
@@ -129,7 +139,7 @@
       WantedBy=multi-user.target
   notify: Restart Kafka
 
-# Task 13: Start Kafka and enable it at system startup.
+# Task 14: Enable and start Kafka.
 - name: Enable and start Kafka
   ansible.builtin.systemd_service:
     name: kafka

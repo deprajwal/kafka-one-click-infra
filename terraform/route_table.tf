@@ -1,5 +1,5 @@
 
-# Route table for internet-bound traffic from the public subnet.
+# Public route table
 resource "aws_route_table" "public_route_table" {
   vpc_id = aws_vpc.kafka_vpc.id
 
@@ -13,7 +13,7 @@ resource "aws_route_table" "public_route_table" {
   }
 }
 
-# Route table for traffic from the private subnet.
+# Private route table for AZ A
 resource "aws_route_table" "private_route_table" {
   vpc_id = aws_vpc.kafka_vpc.id
 
@@ -22,14 +22,35 @@ resource "aws_route_table" "private_route_table" {
   }
 }
 
-# Associate the public subnet with its route table.
+# Private route table for AZ B
+resource "aws_route_table" "private_route_table_2" {
+  vpc_id = aws_vpc.kafka_vpc.id
+
+  tags = {
+    Name = "kafka-private-route-table-2"
+  }
+}
+
+# Public subnet AZ A association
 resource "aws_route_table_association" "public_association" {
   subnet_id      = aws_subnet.public_subnet.id
   route_table_id = aws_route_table.public_route_table.id
 }
 
-# Associate the private subnet with its route table.
+# Private subnet AZ A association
 resource "aws_route_table_association" "private_association" {
   subnet_id      = aws_subnet.private_subnet.id
   route_table_id = aws_route_table.private_route_table.id
+}
+
+# Public subnet AZ B association
+resource "aws_route_table_association" "public_association_2" {
+  subnet_id      = aws_subnet.public_subnet_2.id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+# Private subnet AZ B association
+resource "aws_route_table_association" "private_association_2" {
+  subnet_id      = aws_subnet.private_subnet_2.id
+  route_table_id = aws_route_table.private_route_table_2.id
 }

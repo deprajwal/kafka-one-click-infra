@@ -1,5 +1,5 @@
 
-# Create a security group for the Kafka EC2 instance.
+# Security group for the Kafka EC2 instance.
 resource "aws_security_group" "kafka_sg" {
   name        = "kafka-one-click-sg"
   description = "Security group for Kafka infrastructure"
@@ -24,6 +24,62 @@ resource "aws_security_group" "kafka_sg" {
 
   tags = {
     Name    = "kafka-one-click-sg"
+    Project = "kafka-one-click-infra"
+  }
+}
+
+# Security group for the public Application Load Balancer.
+resource "aws_security_group" "alb_sg" {
+  name        = "kafka-one-click-alb-sg"
+  description = "Allow public HTTP traffic to the ALB"
+  vpc_id      = aws_vpc.kafka_vpc.id
+
+  ingress {
+    description = "HTTP from the internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Outbound traffic to application instances"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "kafka-one-click-alb-sg"
+    Project = "kafka-one-click-infra"
+  }
+}
+
+# Security group for private application EC2 instances.
+resource "aws_security_group" "app_sg" {
+  name        = "kafka-one-click-app-sg"
+  description = "Allow HTTP traffic from the ALB"
+  vpc_id      = aws_vpc.kafka_vpc.id
+
+  ingress {
+    description     = "HTTP from the ALB"
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+  }
+
+  # Allow outbound connections through the NAT Gateway.
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "kafka-one-click-app-sg"
     Project = "kafka-one-click-infra"
   }
 }

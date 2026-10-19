@@ -56,7 +56,11 @@ pipeline {
             }
             steps {
                 dir('terraform') {
-                    sh 'terraform plan -out=tfplan'
+                    sh '''
+                        set -eu
+                        terraform plan -out=tfplan
+                        terraform show -no-color tfplan
+                    '''
                 }
             }
         }
@@ -66,8 +70,10 @@ pipeline {
                 expression { params.ACTION == 'CREATE' }
             }
             steps {
-                input message: 'Review the Terraform plan and AWS costs before creating resources.',
-                      ok: 'Approve CREATE'
+                input(
+                    message: 'Review the Terraform plan and estimated AWS costs before creating resources.',
+                    ok: 'Approve CREATE'
+                )
             }
         }
 
@@ -100,15 +106,15 @@ pipeline {
 
                     for i in $(seq 1 60); do
                         STATUS=$(aws ssm describe-instance-information \
-                          --region "$AWS_DEFAULT_REGION" \
-                          --filters "Key=InstanceIds,Values=${KAFKA_INSTANCE_ID}" \
-                          --query 'InstanceInformationList[0].PingStatus' \
-                          --output text 2>/dev/null || true)
+                            --region "$AWS_DEFAULT_REGION" \
+                            --filters "Key=InstanceIds,Values=${KAFKA_INSTANCE_ID}" \
+                            --query 'InstanceInformationList[0].PingStatus' \
+                            --output text 2>/dev/null || true)
 
                         echo "SSM status: $STATUS (attempt $i/60)"
 
                         if [ "$STATUS" = "Online" ]; then
-                            echo "EC2 is Online in SSM."
+                            echo "Kafka EC2 is Online in SSM."
                             exit 0
                         fi
 
@@ -160,9 +166,9 @@ ansible_user=ec2-user
 INVENTORY
 
                     ansible-playbook \
-                      -i ansible/inventory.ini \
-                      ansible/site.yml \
-                      -e "kafka_advertised_host=${KAFKA_PRIVATE_IP}"
+                        -i ansible/inventory.ini \
+                        ansible/site.yml \
+                        -e "kafka_advertised_host=${KAFKA_PRIVATE_IP}"
                 '''
             }
         }
@@ -183,41 +189,42 @@ INVENTORY
                     set -eu
 
                     COMMAND_ID=$(aws ssm send-command \
-                      --region "$AWS_DEFAULT_REGION" \
-                      --instance-ids "$KAFKA_INSTANCE_ID" \
-                      --document-name "AWS-RunShellScript" \
-                      --parameters '{"commands":["for i in $(seq 1 30); do STATUS=$(sudo systemctl is-active kafka 2>/dev/null || true); if [ \\"$STATUS\\" = \\"active\\" ]; then break; fi; sleep 10; done; echo Kafka_service_status=$(sudo systemctl is-active kafka 2>/dev/null || true); sudo systemctl status kafka --no-pager -l; sudo journalctl -u kafka -n 80 --no-pager; sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
-                      --query 'Command.CommandId' \
-                      --output text)
+                        --region "$AWS_DEFAULT_REGION" \
+                        --instance-ids "$KAFKA_INSTANCE_ID" \
+                        --document-name "AWS-RunShellScript" \
+                        --parameters '{"commands":["for i in $(seq 1 30); do STATUS=$(sudo systemctl is-active kafka 2>/dev/null || true); if [ \\"$STATUS\\" = \\"active\\" ]; then break; fi; sleep 10; done; echo Kafka_service_status=$(sudo systemctl is-active kafka 2>/dev/null || true); sudo systemctl status kafka --no-pager -l; sudo journalctl -u kafka -n 80 --no-pager; sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
+                        --query 'Command.CommandId' \
+                        --output text)
 
                     echo "SSM Command ID: $COMMAND_ID"
 
                     for i in $(seq 1 100); do
                         STATUS=$(aws ssm get-command-invocation \
-                          --region "$AWS_DEFAULT_REGION" \
-                          --command-id "$COMMAND_ID" \
-                          --instance-id "$KAFKA_INSTANCE_ID" \
-                          --query 'Status' --output text 2>/dev/null || true)
+                            --region "$AWS_DEFAULT_REGION" \
+                            --command-id "$COMMAND_ID" \
+                            --instance-id "$KAFKA_INSTANCE_ID" \
+                            --query 'Status' \
+                            --output text 2>/dev/null || true)
 
                         case "$STATUS" in
                             Success)
                                 echo "Kafka verification passed."
                                 aws ssm get-command-invocation \
-                                  --region "$AWS_DEFAULT_REGION" \
-                                  --command-id "$COMMAND_ID" \
-                                  --instance-id "$KAFKA_INSTANCE_ID" \
-                                  --query 'StandardOutputContent' \
-                                  --output text
+                                    --region "$AWS_DEFAULT_REGION" \
+                                    --command-id "$COMMAND_ID" \
+                                    --instance-id "$KAFKA_INSTANCE_ID" \
+                                    --query 'StandardOutputContent' \
+                                    --output text
                                 exit 0
                                 ;;
                             Failed|Cancelled|TimedOut)
                                 echo "Kafka verification failed: $STATUS"
                                 aws ssm get-command-invocation \
-                                  --region "$AWS_DEFAULT_REGION" \
-                                  --command-id "$COMMAND_ID" \
-                                  --instance-id "$KAFKA_INSTANCE_ID" \
-                                  --query '{Output:StandardOutputContent,Error:StandardErrorContent}' \
-                                  --output json
+                                    --region "$AWS_DEFAULT_REGION" \
+                                    --command-id "$COMMAND_ID" \
+                                    --instance-id "$KAFKA_INSTANCE_ID" \
+                                    --query '{Output:StandardOutputContent,Error:StandardErrorContent}' \
+                                    --output json
                                 exit 1
                                 ;;
                         esac
@@ -231,13 +238,93 @@ INVENTORY
             }
         }
 
+        stage('Verify ALB and Application ASG') {
+            when {
+                expression { params.ACTION == 'CREATE' }
+            }
+            steps {
+                script {
+                    env.APP_URL = sh(
+                        script: 'terraform -chdir=terraform output -raw app_alb_url',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh '''
+                    set -eu
+
+                    TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups \
+                        --region "$AWS_DEFAULT_REGION" \
+                        --names kafka-one-click-app-tg \
+                        --query 'TargetGroups[0].TargetGroupArn' \
+                        --output text)
+
+                    echo "Application URL: ${APP_URL}"
+                    echo "Target Group: ${TARGET_GROUP_ARN}"
+
+                    if [ -z "$TARGET_GROUP_ARN" ] || [ "$TARGET_GROUP_ARN" = "None" ]; then
+                        echo "ERROR: Application target group was not found."
+                        exit 1
+                    fi
+
+                    HEALTHY=0
+
+                    for i in $(seq 1 60); do
+                        HEALTHY=$(aws elbv2 describe-target-health \
+                            --region "$AWS_DEFAULT_REGION" \
+                            --target-group-arn "$TARGET_GROUP_ARN" \
+                            --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
+                            --output text)
+
+                        echo "Healthy application targets: $HEALTHY (attempt $i/60)"
+
+                        if [ "$HEALTHY" -ge 1 ]; then
+                            break
+                        fi
+
+                        sleep 10
+                    done
+
+                    if [ "$HEALTHY" -lt 1 ]; then
+                        echo "ERROR: No healthy ALB targets after waiting."
+                        aws elbv2 describe-target-health \
+                            --region "$AWS_DEFAULT_REGION" \
+                            --target-group-arn "$TARGET_GROUP_ARN" \
+                            --output table
+                        exit 1
+                    fi
+
+                    echo "Checking application health endpoint..."
+
+                    for i in $(seq 1 12); do
+                        if curl --fail --silent --show-error --max-time 10 \
+                            "${APP_URL}/health"; then
+                            echo
+                            echo "ALB and application health verification passed."
+                            exit 0
+                        fi
+
+                        echo "Application endpoint not ready (attempt $i/12)"
+                        sleep 10
+                    done
+
+                    echo "ERROR: Application health endpoint did not respond successfully."
+                    exit 1
+                '''
+            }
+        }
+
         stage('Plan DESTROY') {
             when {
                 expression { params.ACTION == 'DESTROY' }
             }
             steps {
                 dir('terraform') {
-                    sh 'terraform plan -destroy -out=tfplan'
+                    sh '''
+                        set -eu
+                        terraform plan -destroy -out=tfplan
+                        terraform show -no-color tfplan
+                    '''
                 }
             }
         }
@@ -247,8 +334,39 @@ INVENTORY
                 expression { params.ACTION == 'DESTROY' }
             }
             steps {
-                input message: 'This removes Terraform-managed infrastructure. Preserve the separate Terraform state bucket.',
-                      ok: 'Approve DESTROY'
+                input(
+                    message: 'WARNING: Review the destroy plan. This removes Terraform-managed infrastructure. The separate Terraform state bucket is not part of this configuration.',
+                    ok: 'Approve DESTROY'
+                )
+            }
+        }
+
+        stage('Prepare SSM Bucket for DESTROY') {
+            when {
+                expression { params.ACTION == 'DESTROY' }
+            }
+            steps {
+                sh '''
+                    set -eu
+
+                    SSM_BUCKET="kafka-one-click-ssm-506192652789"
+
+                    echo "Checking the dedicated SSM transfer bucket..."
+
+                    if aws s3api head-bucket \
+                        --bucket "$SSM_BUCKET" \
+                        --region "$AWS_DEFAULT_REGION" 2>/dev/null; then
+
+                        echo "Removing temporary SSM transfer objects from $SSM_BUCKET"
+                        aws s3 rm "s3://${SSM_BUCKET}" \
+                            --recursive \
+                            --region "$AWS_DEFAULT_REGION"
+                    else
+                        echo "SSM transfer bucket does not exist; skipping cleanup."
+                    fi
+
+                    echo "Terraform state bucket will not be cleaned up."
+                '''
             }
         }
 
@@ -257,19 +375,9 @@ INVENTORY
                 expression { params.ACTION == 'DESTROY' }
             }
             steps {
-                script {
-                    env.SSM_BUCKET = sh(
-                        script: 'terraform -chdir=terraform output -raw ssm_transfer_bucket',
-                        returnStdout: true
-                    ).trim()
+                dir('terraform') {
+                    sh 'terraform apply -auto-approve tfplan'
                 }
-
-                sh '''
-                    set -eu
-                    aws s3 rm "s3://${SSM_BUCKET}" \
-                      --recursive --region "$AWS_DEFAULT_REGION"
-                    terraform -chdir=terraform apply -auto-approve tfplan
-                '''
             }
         }
     }
