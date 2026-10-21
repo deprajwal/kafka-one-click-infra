@@ -19,8 +19,16 @@
     group: root
     mode: "0755"
 
+# Task 3: Check cached Kafka archive on Jenkins controller.
+- name: Check cached Kafka archive
+  ansible.builtin.stat:
+    path: "/tmp/kafka_{{ kafka_version }}.tgz"
+  register: kafka_archive_cache
+  delegate_to: localhost
+  become: false
+  run_once: true
 
-# Task 3: Download Kafka archive on the Jenkins controller.
+# Task 4: Download Kafka only when archive is missing.
 - name: Download Kafka archive on Jenkins controller
   ansible.builtin.get_url:
     url: "https://archive.apache.org/dist/kafka/{{ kafka_version }}/kafka_2.13-{{ kafka_version }}.tgz"
@@ -30,8 +38,9 @@
   delegate_to: localhost
   become: false
   run_once: true
+  when: not kafka_archive_cache.stat.exists
 
-# Task 4: Transfer archive to private Kafka EC2 through SSM.
+# Task 5: Transfer archive to private Kafka EC2 through SSM.
 - name: Transfer Kafka archive to Kafka EC2
   ansible.builtin.copy:
     src: "/tmp/kafka_{{ kafka_version }}.tgz"
@@ -39,14 +48,24 @@
     mode: "0644"
   become: true
 
-# Task 5: Create Kafka group.
+# Task 6: Extract Kafka archive.
+- name: Extract Kafka archive
+  ansible.builtin.unarchive:
+    src: "/tmp/kafka_{{ kafka_version }}.tgz"
+    dest: "{{ kafka_install_dir }}"
+    remote_src: true
+    extra_opts:
+      - "--strip-components=1"
+    creates: "{{ kafka_install_dir }}/bin/kafka-server-start.sh"
+
+# Task 7: Create Kafka group.
 - name: Create Kafka group
   ansible.builtin.group:
     name: kafka
     system: true
     state: present
 
-# Task 6: Create Kafka user.
+# Task 8: Create Kafka user.
 - name: Create Kafka user
   ansible.builtin.user:
     name: kafka
@@ -57,7 +76,7 @@
     create_home: false
     state: present
 
-# Task 7: Create Kafka data directory.
+# Task 9: Create Kafka data directory.
 - name: Create Kafka data directory
   ansible.builtin.file:
     path: "{{ kafka_data_dir }}"
@@ -66,7 +85,7 @@
     group: kafka
     mode: "0750"
 
-# Task 8: Create Kafka logs directory.
+# Task 10: Create Kafka logs directory.
 - name: Create Kafka runtime logs directory
   ansible.builtin.file:
     path: "{{ kafka_install_dir }}/logs"
@@ -75,7 +94,16 @@
     group: kafka
     mode: "0755"
 
-# Task 9: Configure Kafka KRaft properties.
+# Task 11: Set ownership of Kafka installation files.
+- name: Set Kafka installation ownership
+  ansible.builtin.file:
+    path: "{{ kafka_install_dir }}"
+    state: directory
+    owner: root
+    group: kafka
+    recurse: true
+
+# Task 12: Configure Kafka KRaft server properties.
 - name: Configure Kafka KRaft server properties
   ansible.builtin.template:
     src: server.properties.j2
@@ -85,13 +113,13 @@
     mode: "0640"
   notify: Restart Kafka
 
-# Task 10: Check whether KRaft storage is initialized.
+# Task 13: Check whether KRaft storage is initialized.
 - name: Check Kafka storage metadata
   ansible.builtin.stat:
     path: "{{ kafka_data_dir }}/meta.properties"
   register: kafka_storage_metadata
 
-# Task 11: Generate cluster ID only for new storage.
+# Task 14: Generate cluster ID only for new storage.
 - name: Generate Kafka cluster ID
   ansible.builtin.command:
     argv:
@@ -101,7 +129,7 @@
   changed_when: false
   when: not kafka_storage_metadata.stat.exists
 
-# Task 12: Format KRaft storage only when required.
+# Task 15: Format KRaft storage only when required.
 - name: Format Kafka storage
   ansible.builtin.command:
     argv:
@@ -115,7 +143,7 @@
   become_user: kafka
   when: not kafka_storage_metadata.stat.exists
 
-# Task 13: Install Kafka systemd service.
+# Task 16: Install Kafka systemd service.
 - name: Install Kafka systemd service
   ansible.builtin.copy:
     dest: /etc/systemd/system/kafka.service
@@ -142,10 +170,11 @@
       WantedBy=multi-user.target
   notify: Restart Kafka
 
-# Task 14: Reload systemd and enable/start Kafka.
+# Task 17: Reload systemd and enable/start Kafka.
 - name: Enable and start Kafka
   ansible.builtin.systemd_service:
     name: kafka
     enabled: true
     state: started
     daemon_reload: true
+
