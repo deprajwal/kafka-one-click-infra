@@ -1,40 +1,80 @@
 
 ---
-- name: Install Docker and Python dependencies
+# Install Docker using the Amazon Linux package manager.
+- name: Install Docker
   ansible.builtin.dnf:
-    name:
-      - docker
-      - python3
-      - python3-pip
+    name: docker
     state: present
     update_cache: true
 
-- name: Install Docker SDK for Python
-  ansible.builtin.pip:
-    name: docker
-    executable: pip3
-    state: present
-
+# Start Docker automatically.
 - name: Enable and start Docker
   ansible.builtin.systemd_service:
     name: docker
     enabled: true
     state: started
 
+# Download the Kafka UI image.
 - name: Pull Kafka UI image
-  community.docker.docker_image:
-    name: "{{ kafka_ui_image }}"
-    source: pull
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - "{{ kafka_ui_image }}"
+  register: kafka_ui_pull
+  changed_when: >
+    'Downloaded newer image' in
+    (kafka_ui_pull.stdout ~ kafka_ui_pull.stderr) or
+    'Pull complete' in
+    (kafka_ui_pull.stdout ~ kafka_ui_pull.stderr)
 
+# Remove the existing container so updated settings can be applied.
+- name: Remove existing Kafka UI container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - rm
+      - --force
+      - "{{ kafka_ui_container_name }}"
+  register: kafka_ui_remove
+  changed_when: kafka_ui_remove.rc == 0
+  failed_when: false
+
+# Start Kafka UI with environment-based configuration.
 - name: Start Kafka UI container
-  community.docker.docker_container:
-    name: "{{ kafka_ui_container_name }}"
-    image: "{{ kafka_ui_image }}"
-    state: started
-    restart_policy: unless-stopped
-    published_ports:
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ kafka_ui_container_name }}"
+      - --restart
+      - unless-stopped
+      - --publish
       - "127.0.0.1:{{ kafka_ui_port }}:8080"
-    env:
-      DYNAMIC_CONFIG_ENABLED: "false"
-      KAFKA_CLUSTERS_0_NAME: "kafka-demo"
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "{{ kafka_advertised_host }}:{{ kafka_port }}"
+      - --env
+      - "DYNAMIC_CONFIG_ENABLED=false"
+      - --env
+      - "KAFKA_CLUSTERS_0_NAME=kafka-demo"
+      - --env
+      - "KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS={{ kafka_advertised_host }}:{{ kafka_port }}"
+      - "{{ kafka_ui_image }}"
+  register: kafka_ui_run
+  changed_when: true
+
+# Verify that the container is running.
+- name: Verify Kafka UI container is running
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - "{{ '{{' }}.State.Running{{ '}}' }}"
+      - "{{ kafka_ui_container_name }}"
+  register: kafka_ui_status
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: kafka_ui_status.rc == 0 and
+         (kafka_ui_status.stdout | trim) == "true"
