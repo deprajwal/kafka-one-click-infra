@@ -5,6 +5,6 @@
   hosts: kafka
   become: true
 
-  # Execute the reusable Kafka role.
   roles:
     - kafka
+    - kafka-demo

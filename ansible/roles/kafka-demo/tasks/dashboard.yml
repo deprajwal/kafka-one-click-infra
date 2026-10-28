@@ -1,0 +1,40 @@
+
+---
+- name: Install Docker and Python dependencies
+  ansible.builtin.dnf:
+    name:
+      - docker
+      - python3
+      - python3-pip
+    state: present
+    update_cache: true
+
+- name: Install Docker SDK for Python
+  ansible.builtin.pip:
+    name: docker
+    executable: pip3
+    state: present
+
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Pull Kafka UI image
+  community.docker.docker_image:
+    name: "{{ kafka_ui_image }}"
+    source: pull
+
+- name: Start Kafka UI container
+  community.docker.docker_container:
+    name: "{{ kafka_ui_container_name }}"
+    image: "{{ kafka_ui_image }}"
+    state: started
+    restart_policy: unless-stopped
+    published_ports:
+      - "127.0.0.1:{{ kafka_ui_port }}:8080"
+    env:
+      DYNAMIC_CONFIG_ENABLED: "false"
+      KAFKA_CLUSTERS_0_NAME: "kafka-demo"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "{{ kafka_advertised_host }}:{{ kafka_port }}"

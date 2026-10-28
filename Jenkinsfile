@@ -127,7 +127,7 @@ pipeline {
             }
         }
 
-        stage('Configure Kafka with Ansible') {
+        stage('Configure Kafka and Demo with Ansible') {
             when {
                 expression { params.ACTION == 'CREATE' }
             }
@@ -151,7 +151,11 @@ pipeline {
 
                 sh '''
                     set -eu
+
+                    # Install collections required by the SSM inventory
+                    # and Docker dashboard tasks.
                     ansible-galaxy collection install amazon.aws
+                    ansible-galaxy collection install -r ansible/requirements.yml
 
                     cat > ansible/inventory.ini <<INVENTORY
 [kafka]
@@ -173,7 +177,7 @@ INVENTORY
             }
         }
 
-        stage('Verify Kafka') {
+        stage('Verify Kafka Broker') {
             when {
                 expression { params.ACTION == 'CREATE' }
             }
@@ -192,7 +196,7 @@ INVENTORY
                         --region "$AWS_DEFAULT_REGION" \
                         --instance-ids "$KAFKA_INSTANCE_ID" \
                         --document-name "AWS-RunShellScript" \
-                        --parameters '{"commands":["for i in $(seq 1 30); do STATUS=$(sudo systemctl is-active kafka 2>/dev/null || true); if [ \\"$STATUS\\" = \\"active\\" ]; then break; fi; sleep 10; done; echo Kafka_service_status=$(sudo systemctl is-active kafka 2>/dev/null || true); sudo systemctl status kafka --no-pager -l; sudo journalctl -u kafka -n 80 --no-pager; sudo systemctl is-active kafka && sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
+                        --parameters '{"commands":["set -e; sudo systemctl is-active kafka; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]}' \
                         --query 'Command.CommandId' \
                         --output text)
 
@@ -208,17 +212,16 @@ INVENTORY
 
                         case "$STATUS" in
                             Success)
-                                echo "Kafka verification passed."
                                 aws ssm get-command-invocation \
                                     --region "$AWS_DEFAULT_REGION" \
                                     --command-id "$COMMAND_ID" \
                                     --instance-id "$KAFKA_INSTANCE_ID" \
                                     --query 'StandardOutputContent' \
                                     --output text
+                                echo "Kafka broker verification passed."
                                 exit 0
                                 ;;
                             Failed|Cancelled|TimedOut)
-                                echo "Kafka verification failed: $STATUS"
                                 aws ssm get-command-invocation \
                                     --region "$AWS_DEFAULT_REGION" \
                                     --command-id "$COMMAND_ID" \
@@ -232,7 +235,70 @@ INVENTORY
                         sleep 5
                     done
 
-                    echo "Kafka verification timed out."
+                    echo "ERROR: Kafka verification timed out."
+                    exit 1
+                '''
+            }
+        }
+
+        stage('Verify Kafka Demo Services') {
+            when {
+                expression { params.ACTION == 'CREATE' }
+            }
+            steps {
+                script {
+                    env.KAFKA_INSTANCE_ID = sh(
+                        script: 'terraform -chdir=terraform output -raw kafka_instance_id',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh '''
+                    set -eu
+
+                    COMMAND_ID=$(aws ssm send-command \
+                        --region "$AWS_DEFAULT_REGION" \
+                        --instance-ids "$KAFKA_INSTANCE_ID" \
+                        --document-name "AWS-RunShellScript" \
+                        --parameters '{"commands":["set -e; sudo systemctl is-active kafka-demo-consumer1; sudo systemctl is-active kafka-demo-consumer2; sudo docker inspect -f \"{{.State.Running}}\" kafka-ui | grep -qx true; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic demo-topic | grep -q \"PartitionCount: 2\"; echo Kafka demo services and two-partition topic verified."]}' \
+                        --query 'Command.CommandId' \
+                        --output text)
+
+                    echo "Demo verification command: $COMMAND_ID"
+
+                    for i in $(seq 1 60); do
+                        STATUS=$(aws ssm get-command-invocation \
+                            --region "$AWS_DEFAULT_REGION" \
+                            --command-id "$COMMAND_ID" \
+                            --instance-id "$KAFKA_INSTANCE_ID" \
+                            --query 'Status' \
+                            --output text 2>/dev/null || true)
+
+                        case "$STATUS" in
+                            Success)
+                                aws ssm get-command-invocation \
+                                    --region "$AWS_DEFAULT_REGION" \
+                                    --command-id "$COMMAND_ID" \
+                                    --instance-id "$KAFKA_INSTANCE_ID" \
+                                    --query 'StandardOutputContent' \
+                                    --output text
+                                exit 0
+                                ;;
+                            Failed|Cancelled|TimedOut)
+                                aws ssm get-command-invocation \
+                                    --region "$AWS_DEFAULT_REGION" \
+                                    --command-id "$COMMAND_ID" \
+                                    --instance-id "$KAFKA_INSTANCE_ID" \
+                                    --query '{Output:StandardOutputContent,Error:StandardErrorContent}' \
+                                    --output json
+                                exit 1
+                                ;;
+                        esac
+
+                        sleep 5
+                    done
+
+                    echo "ERROR: Demo verification timed out."
                     exit 1
                 '''
             }

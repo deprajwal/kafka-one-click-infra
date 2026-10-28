@@ -1,0 +1,155 @@
+
+---
+# Wait until Kafka is ready.
+- name: Wait for Kafka broker port
+  ansible.builtin.wait_for:
+    host: "127.0.0.1"
+    port: "{{ kafka_port }}"
+    delay: 5
+    timeout: 180
+
+# Create the demo topic with two partitions.
+- name: Create Kafka demo topic
+  ansible.builtin.command:
+    argv:
+      - "{{ kafka_install_dir }}/bin/kafka-topics.sh"
+      - --bootstrap-server
+      - "127.0.0.1:{{ kafka_port }}"
+      - --create
+      - --if-not-exists
+      - --topic
+      - "{{ kafka_demo_topic }}"
+      - --partitions
+      - "{{ kafka_demo_partitions | string }}"
+      - --replication-factor
+      - "{{ kafka_demo_replication_factor | string }}"
+  become: true
+  become_user: kafka
+  register: kafka_demo_topic_create
+  changed_when: "'Created topic' in kafka_demo_topic_create.stdout"
+
+# Verify the topic configuration.
+- name: Describe Kafka demo topic
+  ansible.builtin.command:
+    argv:
+      - "{{ kafka_install_dir }}/bin/kafka-topics.sh"
+      - --bootstrap-server
+      - "127.0.0.1:{{ kafka_port }}"
+      - --describe
+      - --topic
+      - "{{ kafka_demo_topic }}"
+  become: true
+  become_user: kafka
+  register: kafka_demo_topic_description
+  changed_when: false
+  failed_when: >
+    kafka_demo_topic_description.rc != 0 or
+    ('PartitionCount: 2' not in kafka_demo_topic_description.stdout)
+
+# Install Python and pip.
+- name: Install Python dependencies
+  ansible.builtin.dnf:
+    name:
+      - python3
+      - python3-pip
+    state: present
+
+# Create the demo application directory.
+- name: Create Kafka demo directory
+  ansible.builtin.file:
+    path: "{{ kafka_demo_app_dir }}"
+    state: directory
+    owner: "{{ kafka_demo_user }}"
+    group: "{{ kafka_demo_user }}"
+    mode: "0755"
+
+# Install the Kafka Python client.
+- name: Install kafka-python
+  ansible.builtin.pip:
+    name: "kafka-python"
+    executable: pip3
+    state: present
+    extra_args: "--break-system-packages"
+
+# Deploy the producer.
+- name: Deploy Kafka demo producer
+  ansible.builtin.template:
+    src: producer.py.j2
+    dest: "{{ kafka_demo_app_dir }}/producer.py"
+    owner: "{{ kafka_demo_user }}"
+    group: "{{ kafka_demo_user }}"
+    mode: "0750"
+
+# Deploy the consumer.
+- name: Deploy Kafka demo consumer
+  ansible.builtin.template:
+    src: consumer.py.j2
+    dest: "{{ kafka_demo_app_dir }}/consumer.py"
+    owner: "{{ kafka_demo_user }}"
+    group: "{{ kafka_demo_user }}"
+    mode: "0750"
+
+# Create a systemd service for consumer 1.
+- name: Configure Kafka demo consumer 1
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/kafka-demo-consumer1.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Kafka Demo Consumer 1
+      After=kafka.service
+      Requires=kafka.service
+
+      [Service]
+      Type=simple
+      User={{ kafka_demo_user }}
+      Group={{ kafka_demo_user }}
+      Environment="CONSUMER_NAME=consumer-1"
+      ExecStart=/usr/bin/python3 {{ kafka_demo_app_dir }}/consumer.py
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+# Create a systemd service for consumer 2.
+- name: Configure Kafka demo consumer 2
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/kafka-demo-consumer2.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Kafka Demo Consumer 2
+      After=kafka.service
+      Requires=kafka.service
+
+      [Service]
+      Type=simple
+      User={{ kafka_demo_user }}
+      Group={{ kafka_demo_user }}
+      Environment="CONSUMER_NAME=consumer-2"
+      ExecStart=/usr/bin/python3 {{ kafka_demo_app_dir }}/consumer.py
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+# Start both consumers automatically.
+- name: Enable and start Kafka demo consumers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: restarted
+    daemon_reload: true
+  loop:
+    - kafka-demo-consumer1
+    - kafka-demo-consumer2
+
+# Deploy and start Kafka UI dashboard.
+- name: Configure Kafka UI dashboard
+  ansible.builtin.import_tasks: dashboard.yml

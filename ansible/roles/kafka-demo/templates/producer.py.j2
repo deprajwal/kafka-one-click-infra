@@ -1,0 +1,49 @@
+
+#!/usr/bin/env python3
+import json
+import sys
+from datetime import datetime, timezone
+
+from kafka import KafkaProducer
+
+BOOTSTRAP_SERVERS = "127.0.0.1:9092"
+TOPIC = "demo-topic"
+
+producer = KafkaProducer(
+    bootstrap_servers=BOOTSTRAP_SERVERS,
+    value_serializer=lambda value: json.dumps(value).encode("utf-8"),
+    key_serializer=lambda key: key.encode("utf-8"),
+    acks="all",
+)
+
+try:
+    print(f"Kafka demo producer started. Topic: {TOPIC}")
+    print("Type a message and press Enter. Type 'exit' to stop.")
+
+    while True:
+        message = input("Message> ").strip()
+
+        if message.lower() == "exit":
+            break
+
+        if not message:
+            continue
+
+        event = {
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        metadata = producer.send(
+            TOPIC,
+            key=message,
+            value=event,
+        ).get(timeout=10)
+
+        print(
+            f"Sent: {event} | "
+            f"partition={metadata.partition} | offset={metadata.offset}"
+        )
+finally:
+    producer.flush()
+    producer.close()

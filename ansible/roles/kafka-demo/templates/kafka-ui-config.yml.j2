@@ -1,0 +1,10 @@
+
+kafka:
+  clusters:
+    - name: kafka-demo
+      bootstrapServers: "{{ kafka_advertised_host }}:{{ kafka_port }}"
+      properties:
+        security.protocol: PLAINTEXT
+
+server:
+  port: {{ kafka_ui_port }}

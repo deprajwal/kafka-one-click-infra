@@ -3,17 +3,30 @@
 # Kafka version to install.
 kafka_version: "3.9.2"
 
-# Base directory where Kafka will be installed.
+# Kafka installation and data directories.
 kafka_install_dir: "/opt/kafka"
-
-# Directory where Kafka will store its event logs.
 kafka_data_dir: "/var/lib/kafka"
 
-# Port used by Kafka clients.
+# Kafka broker and KRaft controller ports.
 kafka_port: 9092
+kafka_controller_port: 9093
 
-# Address that Kafka advertises to clients.
+# Kafka advertised address for clients on the EC2 instance.
 kafka_advertised_host: "127.0.0.1"
 
-# KRaft controller communication port.
-kafka_controller_port: 9093
+# Kafka demo topic configuration.
+kafka_demo_topic: "demo-topic"
+kafka_demo_partitions: 2
+kafka_demo_replication_factor: 1
+
+# Consumer group shared by both demo consumers.
+kafka_demo_consumer_group: "demo-group"
+
+# Kafka UI configuration.
+kafka_ui_port: 8080
+kafka_ui_container_name: "kafka-ui"
+kafka_ui_image: "provectuslabs/kafka-ui:latest"
+
+# Demo application configuration.
+kafka_demo_app_dir: "/opt/kafka-demo"
+kafka_demo_user: "kafka"
