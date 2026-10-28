@@ -123,42 +123,33 @@
       [Install]
       WantedBy=multi-user.target
 
-# Create a systemd service for consumer 2.
-- name: Configure Kafka demo consumer 2
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/kafka-demo-consumer2.service
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=Kafka Demo Consumer 2
-      After=kafka.service
-      Requires=kafka.service
-
-      [Service]
-      Type=simple
-      User={{ kafka_demo_user }}
-      Group={{ kafka_demo_user }}
-      Environment="CONSUMER_NAME=consumer-2"
-      ExecStart={{ kafka_demo_app_dir }}/venv/bin/python {{ kafka_demo_app_dir }}/consumer.py
-      Restart=always
-      RestartSec=3
-
-      [Install]
-      WantedBy=multi-user.target
-
-# Enable and start both consumers.
-- name: Enable and start Kafka demo consumers
+# Enable and start the single demo consumer.
+- name: Enable and start Kafka demo consumer
   ansible.builtin.systemd_service:
-    name: "{{ item }}"
+    name: kafka-demo-consumer1
     enabled: true
     state: restarted
     daemon_reload: true
-  loop:
-    - kafka-demo-consumer1
-    - kafka-demo-consumer2
 
+# Safely clean up the old second consumer, if present.
+- name: Check for legacy Kafka demo consumer 2 unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/kafka-demo-consumer2.service
+  register: legacy_consumer2_unit
+
+- name: Stop and disable legacy Kafka demo consumer 2
+  ansible.builtin.systemd_service:
+    name: kafka-demo-consumer2
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  when: legacy_consumer2_unit.stat.exists
+
+- name: Remove legacy Kafka demo consumer 2 unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/kafka-demo-consumer2.service
+    state: absent
+  when: legacy_consumer2_unit.stat.exists
 # Deploy and start Kafka UI dashboard.
 - name: Configure Kafka UI dashboard
   ansible.builtin.import_tasks: dashboard.yml
