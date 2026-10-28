@@ -63,13 +63,22 @@
     group: "{{ kafka_demo_user }}"
     mode: "0755"
 
-# Install the Kafka Python client.
-- name: Install kafka-python
+# Create a Python virtual environment to avoid system pip conflicts.
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -m
+      - venv
+      - "{{ kafka_demo_app_dir }}/venv"
+    creates: "{{ kafka_demo_app_dir }}/venv/bin/python"
+
+# Install the Kafka Python client inside the virtual environment.
+- name: Install kafka-python in virtual environment
   ansible.builtin.pip:
-    name: "kafka-python"
-    executable: pip3
+    name: kafka-python
+    executable: "{{ kafka_demo_app_dir }}/venv/bin/pip"
     state: present
-    extra_args: "--break-system-packages"
 
 # Deploy the producer.
 - name: Deploy Kafka demo producer
@@ -107,7 +116,7 @@
       User={{ kafka_demo_user }}
       Group={{ kafka_demo_user }}
       Environment="CONSUMER_NAME=consumer-1"
-      ExecStart=/usr/bin/python3 {{ kafka_demo_app_dir }}/consumer.py
+      ExecStart={{ kafka_demo_app_dir }}/venv/bin/python {{ kafka_demo_app_dir }}/consumer.py
       Restart=always
       RestartSec=3
 
@@ -132,14 +141,14 @@
       User={{ kafka_demo_user }}
       Group={{ kafka_demo_user }}
       Environment="CONSUMER_NAME=consumer-2"
-      ExecStart=/usr/bin/python3 {{ kafka_demo_app_dir }}/consumer.py
+      ExecStart={{ kafka_demo_app_dir }}/venv/bin/python {{ kafka_demo_app_dir }}/consumer.py
       Restart=always
       RestartSec=3
 
       [Install]
       WantedBy=multi-user.target
 
-# Start both consumers automatically.
+# Enable and start both consumers.
 - name: Enable and start Kafka demo consumers
   ansible.builtin.systemd_service:
     name: "{{ item }}"
