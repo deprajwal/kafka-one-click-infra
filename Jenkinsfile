@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -152,7 +151,7 @@ pipeline {
                 sh '''
                     set -eu
 
-                    # Install collections required by the SSM inventory
+                    # Install collections required by SSM inventory
                     # and Docker dashboard tasks.
                     ansible-galaxy collection install amazon.aws
                     ansible-galaxy collection install -r ansible/requirements.yml
@@ -218,6 +217,7 @@ INVENTORY
                                     --instance-id "$KAFKA_INSTANCE_ID" \
                                     --query 'StandardOutputContent' \
                                     --output text
+
                                 echo "Kafka broker verification passed."
                                 exit 0
                                 ;;
@@ -256,11 +256,17 @@ INVENTORY
                 sh '''
                     set -eu
 
+                    # Safely generate JSON for SSM instead of manually
+                    # escaping nested shell, Docker-template and JSON quotes.
+                    REMOTE_COMMAND='set -e; sudo systemctl is-active kafka-demo-consumer1; sudo systemctl is-active kafka-demo-consumer2; sudo docker inspect --format={{.State.Running}} kafka-ui | grep -qx true; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic demo-topic | grep -q "PartitionCount: 2"; echo Kafka demo services and two-partition topic verified.'
+
+                    PARAMETERS_JSON=$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]]}))' "$REMOTE_COMMAND")
+
                     COMMAND_ID=$(aws ssm send-command \
                         --region "$AWS_DEFAULT_REGION" \
                         --instance-ids "$KAFKA_INSTANCE_ID" \
                         --document-name "AWS-RunShellScript" \
-                        --parameters '{"commands":["set -e; sudo systemctl is-active kafka-demo-consumer1; sudo systemctl is-active kafka-demo-consumer2; sudo docker inspect -f \"{{.State.Running}}\" kafka-ui | grep -qx true; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic demo-topic | grep -q \"PartitionCount: 2\"; echo Kafka demo services and two-partition topic verified."]}' \
+                        --parameters "$PARAMETERS_JSON" \
                         --query 'Command.CommandId' \
                         --output text)
 
@@ -282,6 +288,8 @@ INVENTORY
                                     --instance-id "$KAFKA_INSTANCE_ID" \
                                     --query 'StandardOutputContent' \
                                     --output text
+
+                                echo "Kafka demo services verification passed."
                                 exit 0
                                 ;;
                             Failed|Cancelled|TimedOut)
