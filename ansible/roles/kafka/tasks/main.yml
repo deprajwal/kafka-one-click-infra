@@ -28,16 +28,21 @@
   become: false
   run_once: true
 
-# Task 4: Download Kafka only when archive is missing.
+# Task 4: Download Kafka archive with retries.
 - name: Download Kafka archive on Jenkins controller
   ansible.builtin.get_url:
     url: "https://archive.apache.org/dist/kafka/{{ kafka_version }}/kafka_2.13-{{ kafka_version }}.tgz"
     dest: "/tmp/kafka_{{ kafka_version }}.tgz"
     mode: "0644"
-    timeout: 120
+    timeout: 300
+    force: false
   delegate_to: localhost
   become: false
   run_once: true
+  register: kafka_download_result
+  retries: 3
+  delay: 10
+  until: kafka_download_result is succeeded
   when: not kafka_archive_cache.stat.exists
 
 # Task 5: Transfer archive to private Kafka EC2 through SSM.
