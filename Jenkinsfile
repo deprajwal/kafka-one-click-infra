@@ -151,8 +151,6 @@ pipeline {
                 sh '''
                     set -eu
 
-                    # Install collections required by SSM inventory
-                    # and Docker dashboard tasks.
                     ansible-galaxy collection install amazon.aws
                     ansible-galaxy collection install -r ansible/requirements.yml
 
@@ -171,7 +169,9 @@ INVENTORY
                     ansible-playbook \
                         -i ansible/inventory.ini \
                         ansible/site.yml \
-                        -e "kafka_advertised_host=${KAFKA_PRIVATE_IP}"
+                        -e "kafka_advertised_host=${KAFKA_PRIVATE_IP}" \
+                        -e "ssm_transfer_bucket=${SSM_BUCKET}" \
+                        -e "aws_region=${AWS_DEFAULT_REGION}"
                 '''
             }
         }
@@ -256,9 +256,7 @@ INVENTORY
                 sh '''
                     set -eu
 
-                    # Safely generate JSON for SSM instead of manually
-                    # escaping nested shell, Docker-template and JSON quotes.
-                    REMOTE_COMMAND='set -e; sudo systemctl is-active kafka-demo-consumer1; sudo docker inspect --format={{.State.Running}} kafka-ui | grep -qx true; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic demo-topic | grep -q "PartitionCount: 2"; TOKEN="jenkins-test-$(date +%s)-$$"; printf "%s\nexit\n" "$TOKEN" | sudo -u kafka /opt/kafka-demo/venv/bin/python /opt/kafka-demo/producer.py; for i in $(seq 1 30); do if sudo journalctl -u kafka-demo-consumer1 --since "-2 minutes" --no-pager | grep -F "$TOKEN"; then echo "Actual producer-to-consumer test passed"; exit 0; fi; sleep 2; done; echo "ERROR: consumer did not receive test message: $TOKEN"; exit 1'
+                    REMOTE_COMMAND='set -e; sudo systemctl is-active kafka-demo-consumer1; sudo docker inspect --format={{.State.Running}} kafka-ui | grep -qx true; sudo -u kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic demo-topic | grep -q "PartitionCount: 2"; TOKEN="jenkins-test-$(date +%s)-$$"; printf "%s\\nexit\\n" "$TOKEN" | sudo -u kafka /opt/kafka-demo/venv/bin/python /opt/kafka-demo/producer.py; for i in $(seq 1 30); do if sudo journalctl -u kafka-demo-consumer1 --since "-2 minutes" --no-pager | grep -F "$TOKEN"; then echo "Actual producer-to-consumer test passed"; exit 0; fi; sleep 2; done; echo "ERROR: consumer did not receive test message: $TOKEN"; exit 1'
 
                     PARAMETERS_JSON=$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]]}))' "$REMOTE_COMMAND")
 

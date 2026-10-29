@@ -1,12 +1,13 @@
 
 ---
-# Task 1: Install Java and required utilities.
+# Task 1: Install Java, archive utilities and AWS CLI.
 - name: Install required packages
   ansible.builtin.dnf:
     name:
       - java-21-amazon-corretto-headless
       - tar
       - gzip
+      - awscli-2
     state: present
     update_cache: true
 
@@ -19,16 +20,16 @@
     group: root
     mode: "0755"
 
-# Task 3: Check cached Kafka archive on Jenkins controller.
+# Task 3: Check cached archive and download it when missing.
 - name: Check cached Kafka archive
   ansible.builtin.stat:
     path: "/tmp/kafka_{{ kafka_version }}.tgz"
+    checksum_algorithm: sha256
   register: kafka_archive_cache
   delegate_to: localhost
   become: false
   run_once: true
 
-# Task 4: Download Kafka archive with retries.
 - name: Download Kafka archive on Jenkins controller
   ansible.builtin.get_url:
     url: "https://archive.apache.org/dist/kafka/{{ kafka_version }}/kafka_2.13-{{ kafka_version }}.tgz"
@@ -45,15 +46,76 @@
   until: kafka_download_result is succeeded
   when: not kafka_archive_cache.stat.exists
 
-# Task 5: Transfer archive to private Kafka EC2 through SSM.
-- name: Transfer Kafka archive to Kafka EC2
-  ansible.builtin.copy:
-    src: "/tmp/kafka_{{ kafka_version }}.tgz"
-    dest: "/tmp/kafka_{{ kafka_version }}.tgz"
-    mode: "0644"
+# Task 4: Validate archive and calculate its SHA-256 checksum.
+- name: Inspect Kafka archive on Jenkins controller
+  ansible.builtin.stat:
+    path: "/tmp/kafka_{{ kafka_version }}.tgz"
+    checksum_algorithm: sha256
+  register: kafka_archive_file
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Validate Kafka archive
+  ansible.builtin.assert:
+    that:
+      - kafka_archive_file.stat.exists
+      - kafka_archive_file.stat.isreg
+      - kafka_archive_file.stat.size | int > 0
+      - kafka_archive_file.stat.checksum is defined
+    fail_msg: "Kafka archive is missing, empty or cannot be checksummed."
+  run_once: true
+
+# Task 5: Upload archive to the dedicated S3 transfer bucket.
+- name: Upload Kafka archive to S3
+  ansible.builtin.command:
+    argv:
+      - aws
+      - s3
+      - cp
+      - "/tmp/kafka_{{ kafka_version }}.tgz"
+      - "s3://{{ ssm_transfer_bucket }}/kafka/kafka_2.13-{{ kafka_version }}.tgz"
+      - --region
+      - "{{ aws_region }}"
+      - --sse
+      - AES256
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: true
+
+# Task 6: Download archive on EC2 and verify its checksum.
+- name: Download Kafka archive from S3
+  ansible.builtin.command:
+    argv:
+      - aws
+      - s3
+      - cp
+      - "s3://{{ ssm_transfer_bucket }}/kafka/kafka_2.13-{{ kafka_version }}.tgz"
+      - "/tmp/kafka_{{ kafka_version }}.tgz"
+      - --region
+      - "{{ aws_region }}"
+      - --sse
+      - AES256
+  register: kafka_s3_download
   become: true
 
-# Task 6: Extract Kafka archive.
+- name: Calculate remote Kafka archive checksum
+  ansible.builtin.command:
+    argv:
+      - sha256sum
+      - "/tmp/kafka_{{ kafka_version }}.tgz"
+  register: kafka_remote_checksum
+  changed_when: false
+  become: true
+
+- name: Verify Kafka archive integrity
+  ansible.builtin.assert:
+    that:
+      - kafka_remote_checksum.stdout.split()[0] == kafka_archive_file.stat.checksum
+    fail_msg: "Kafka archive checksum mismatch. Extraction stopped."
+
+# Task 7: Extract verified Kafka archive.
 - name: Extract Kafka archive
   ansible.builtin.unarchive:
     src: "/tmp/kafka_{{ kafka_version }}.tgz"
@@ -63,14 +125,14 @@
       - "--strip-components=1"
     creates: "{{ kafka_install_dir }}/bin/kafka-server-start.sh"
 
-# Task 7: Create Kafka group.
+# Task 8: Create Kafka group.
 - name: Create Kafka group
   ansible.builtin.group:
     name: kafka
     system: true
     state: present
 
-# Task 8: Create Kafka user.
+# Task 9: Create Kafka user.
 - name: Create Kafka user
   ansible.builtin.user:
     name: kafka
@@ -81,7 +143,7 @@
     create_home: false
     state: present
 
-# Task 9: Create Kafka data directory.
+# Task 10: Create Kafka data directory.
 - name: Create Kafka data directory
   ansible.builtin.file:
     path: "{{ kafka_data_dir }}"
@@ -90,17 +152,7 @@
     group: kafka
     mode: "0750"
 
-# Task 10: Create Kafka logs directory.
-- name: Create Kafka runtime logs directory
-  ansible.builtin.file:
-    path: "{{ kafka_install_dir }}/logs"
-    state: directory
-    owner: kafka
-    group: kafka
-    mode: "0755"
-
-# Task 11: Set ownership of Kafka installation files.
-# Fix Kafka runtime log directory permissions.
+# Task 11: Create Kafka logs directory with correct ownership.
 - name: Set Kafka logs directory ownership
   ansible.builtin.file:
     path: "{{ kafka_install_dir }}/logs"
