@@ -95,8 +95,6 @@
       - "/tmp/kafka_{{ kafka_version }}.tgz"
       - --region
       - "{{ aws_region }}"
-      - --sse
-      - AES256
   register: kafka_s3_download
   become: true
 
